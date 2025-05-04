@@ -28,14 +28,19 @@ When working with Megatron:
 
 import logging
 import os
+import sys
+import time
+import json
 from contextlib import contextmanager
 from typing import Any, Dict, List, Union
+import requests
 
 import numpy as np
 import torch
 import torch.distributed
 from omegaconf import DictConfig
 from tensordict import TensorDict
+import verl.utils.torch_functional as verl_F
 from vllm import LLM, SamplingParams
 from vllm.distributed import parallel_state as vllm_ps
 from vllm.worker.worker_base import WorkerWrapperBase
@@ -44,15 +49,61 @@ from verl import DataProto
 from verl.third_party.vllm import vllm_version
 from verl.utils.debug import GPUMemoryLogger
 from verl.utils.torch_functional import get_response_mask, pad_2d_list_to_length
+from verl.utils.model import compute_position_id_with_mask
 from verl.workers.rollout.base import BaseRollout
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
-# TODO
-# 1. support pp in vllm
-# 2. passing tokenizer is not necessary? no encoding/decoding is happending here
-# 3. simplify init logics
+def retrieve_context_train(query, repo_commit):
+    url = "https://cogcomp.seas.upenn.edu/ow4008/retrieve"
+    data = {"query": query, "repo_commit": repo_commit}
+    
+    try:
+        response = requests.post(url, json=data)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Error: {e}")
+        return None
+    
+def retrieve_context_test(query, repo_commit):
+    url = "https://cogcomp.seas.upenn.edu/mo4002/retrieve"
+    data = {"query": query, "repo_commit": repo_commit}
+    
+    try:
+        response = requests.post(url, json=data)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Error: {e}")
+        return None
+    
+def batch_retrieve_train(query_list, repo_commit_list, sample_n, batch_size=128):
+    contexts = []
+    for i in range(0, len(query_list), batch_size):
+        batch_query = query_list[i:i + batch_size]
+        batch_repo_commit = [repo_commit_list[j // sample_n] for j in range(i, i + len(batch_query))]
+        
+        # Call the retrieve_context_rm function for each batch
+        batch_contexts = json.loads(retrieve_context_train(batch_query, batch_repo_commit))
+        if batch_contexts:
+            contexts.extend(batch_contexts)
+    
+    return contexts
+
+def batch_retrieve_test(query_list, repo_commit_list, batch_size=128):
+    contexts = []
+    for i in range(0, len(query_list), batch_size):
+        batch_query = query_list[i:i + batch_size]
+        batch_repo_commit = repo_commit_list[i:i + batch_size]
+        
+        # Call the retrieve_context_rm function for each batch
+        batch_contexts = retrieve_context_test(batch_query, batch_repo_commit)
+        if batch_contexts:
+            contexts.extend(batch_contexts)
+    
+    return contexts
 
 
 # NOTE(sgm): add for verl. We can optimize it by making the dataloader yield List[int] without padding.
@@ -62,6 +113,12 @@ def _pre_process_inputs(pad_token_id, prompt_token_ids: torch.Tensor) -> List[in
     # is not None else self.llm_engine.tokenizer.eos_token_id
     non_pad_index = torch.nonzero(prompt_token_ids != pad_token_id, as_tuple=False)[0][0]
     token_ids = prompt_token_ids[non_pad_index:].tolist()
+    return token_ids
+
+def _pre_process_response(pad_token_id, response_token_ids: torch.Tensor) -> List[int]:
+    # remove the right padding in the response token_id
+    non_pad_index = torch.nonzero(response_token_ids != pad_token_id, as_tuple=False)[-1][0]
+    token_ids = response_token_ids[:non_pad_index + 1].tolist()
     return token_ids
 
 
@@ -84,6 +141,7 @@ class vLLMRollout(BaseRollout):
             **kwargs: train_tp, for Megatron Backend to initialize hybrid engine (zero redundancy) process group
         """
         super().__init__()
+        self.tokenizer = tokenizer
         self.config = config
         assert not (not config.enforce_eager and config.free_cache_engine), "disable CUDA graph (enforce_eager = False) if free cache engine"
 
@@ -206,12 +264,19 @@ class vLLMRollout(BaseRollout):
 
         # used to construct attention_mask
         eos_token_id = prompts.meta_info["eos_token_id"]
+        
+        repo_list = prompts.non_tensor_batch['repo']
+        base_commit_list = prompts.non_tensor_batch['base_commit']
 
         batch_size = idx.size(0)
+        
+        idx_list = []
+        for i in range(batch_size):
+            idx_list.append(_pre_process_inputs(self.pad_token_id, idx[i]))
 
         non_tensor_batch = prompts.non_tensor_batch
         if "raw_prompt_ids" not in non_tensor_batch:
-            non_tensor_batch["raw_prompt_ids"] = np.array([_pre_process_inputs(self.pad_token_id, idx[i]) for i in range(batch_size)], dtype=object)
+            non_tensor_batch["raw_prompt_ids"] = np.array([idx_list[i] for i in range(batch_size)], dtype=object)
 
         if batch_size != len(non_tensor_batch["raw_prompt_ids"]):
             raise RuntimeError("vllm sharding manager is not work properly.")
@@ -235,6 +300,7 @@ class vLLMRollout(BaseRollout):
         is_validate = prompts.meta_info.get("validate", False)
         if not do_sample:
             kwargs = {
+                'max_tokens': 50,
                 "best_of": 1,
                 "top_p": 1.0,
                 "top_k": -1,
@@ -245,10 +311,15 @@ class vLLMRollout(BaseRollout):
         elif is_validate:
             # TODO: try **
             kwargs = {
+                'max_tokens': 50,
                 "top_k": self.config.val_kwargs.top_k,
                 "top_p": self.config.val_kwargs.top_p,
                 "temperature": self.config.val_kwargs.temperature,
                 "n": 1,  # if validate, already repeat in ray_trainer
+            }
+        else:
+            kwargs = {
+                'max_tokens': 50
             }
 
         # users can customize different sampling_params at different run
@@ -259,30 +330,116 @@ class vLLMRollout(BaseRollout):
                 use_tqdm=False,
             )
 
-            # TODO(sgm): disable logprob when recompute_log_prob is enable
-            # if n = 1: (bs, response_length) ; if n > 1: (bs * n, response_length)
-
-            response = []
+            query_response = []
             for output in outputs:
                 for sample_id in range(len(output.outputs)):
-                    response.append(output.outputs[sample_id].token_ids)
+                    query_response.append(output.outputs[sample_id].token_ids)
+            
+            query_txt = self.tokenizer.batch_decode(query_response, skip_special_tokens=True)
+            
+            sample_n = self.sampling_params.n
+            query_list = []
+            repo_commit_list = []
+            for i in range(batch_size):
+                repo_commit_list.append((repo_list[i], base_commit_list[i]))
+                for j in range(sample_n):
+                    idx_flat = i * sample_n + j
+                    query_list.append(query_txt[idx_flat])
+            print(f"length of query_list: {len(query_list)}")
+            
+            start_time = time.time()
+            if do_sample:
+                contexts = batch_retrieve_train(query_list, repo_commit_list, sample_n, batch_size=128)
+            else:
+                contexts = batch_retrieve_test(query_list, repo_commit_list, batch_size=128)
+            end_time = time.time()
+            print(f"Time taken for batch retrieval: {end_time - start_time} seconds")
+                
+            context_data = self.tokenizer(contexts, return_tensors="pt", padding=True, truncation=True, max_length=5000, add_special_tokens=False).to(idx.device)
+            
+            patch_input_list = []
+            patch_input_ids_ts_list = []
+            attention_mask_list = []
+            for i in range(len(contexts)):
+                processed_query = list(query_response[i])
 
-            response = pad_2d_list_to_length(response, self.pad_token_id, max_length=self.config.response_length).to(idx.device)
+                context_ids = context_data['input_ids'][i]
+                context_attention_mask = context_data['attention_mask'][i]
+                patch_input_ids = idx_list[i // sample_n] + processed_query + _pre_process_response(self.pad_token_id, context_ids)
+                patch_input_ids_ts = torch.tensor(patch_input_ids).to(idx.device)
+                attention_mask = (patch_input_ids_ts != self.pad_token_id).long()
+                
+                sequence_length = len(patch_input_ids_ts)
+                if sequence_length < self.config.prompt_length:
+                    patch_input_ids_ts = verl_F.pad_sequence_to_length(patch_input_ids_ts, self.config.prompt_length, self.pad_token_id, left_pad=True)
+                    attention_mask = verl_F.pad_sequence_to_length(attention_mask, self.config.prompt_length, 0, left_pad=True)
+                elif sequence_length > self.config.prompt_length:
+                    patch_input_ids = patch_input_ids[:self.config.prompt_length]
+                    patch_input_ids_ts = patch_input_ids_ts[:self.config.prompt_length]
+                    attention_mask = attention_mask[:self.config.prompt_length]
+                
+                patch_input_list.append(patch_input_ids)
+                patch_input_ids_ts_list.append(patch_input_ids_ts)
+                attention_mask_list.append(attention_mask)
+                
+            patch_idx = torch.stack(patch_input_ids_ts_list, dim=0)
+            attention_mask = torch.stack(attention_mask_list, dim=0)
+            position_ids = compute_position_id_with_mask(attention_mask)
+            
+            # convert to vllm input
+            vllm_inputs = [{"prompt_token_ids": patch_input_list[i]} for i in range(len(patch_input_list))]
+            
+            if not do_sample:
+                kwargs = {
+                    'max_tokens': self.config.response_length,
+                    'best_of': 1,
+                    'top_p': 1.0,
+                    'top_k': -1,
+                    'min_p': 0.0,
+                    'temperature': 0,
+                    'n': 1  # if greedy, only 1 response
+                }
+            elif is_validate:
+                kwargs = {
+                    'max_tokens': self.config.response_length,
+                    "top_k": self.config.val_kwargs.top_k,
+                    "top_p": self.config.val_kwargs.top_p,
+                    "temperature": self.config.val_kwargs.temperature,
+                    "n": 1,  # if validate, already repeat in ray_trainer
+                }
+            else:
+                kwargs = {
+                    'max_tokens': self.config.response_length,
+                }
+                
+            with self.update_sampling_params(**kwargs):
+                outputs = self.inference_engine.generate(
+                    prompts=vllm_inputs,
+                    sampling_params=self.sampling_params,
+                    use_tqdm=False,
+                )
+            
+            patch_response = []
+            for output in outputs:
+                for sample_id in range(len(output.outputs)):
+                    patch_response.append(output.outputs[sample_id].token_ids)
+
+            patch_response = pad_2d_list_to_length(patch_response, self.pad_token_id, max_length=self.config.response_length).to(idx.device)
 
             if self.sampling_params.n > 1 and do_sample:
-                idx = _repeat_interleave(idx, self.sampling_params.n)
+                patch_idx = _repeat_interleave(patch_idx, self.sampling_params.n)
                 attention_mask = _repeat_interleave(attention_mask, self.sampling_params.n)
                 position_ids = _repeat_interleave(position_ids, self.sampling_params.n)
-                batch_size = batch_size * self.sampling_params.n
-                if "multi_modal_inputs" in non_tensor_batch.keys():
-                    non_tensor_batch["multi_modal_inputs"] = _repeat_interleave(non_tensor_batch["multi_modal_inputs"], self.sampling_params.n)
-                # NOTE(linjunrong): for multi-turn https://github.com/volcengine/verl/pull/1037
+                batch_size = batch_size * self.sampling_params.n * self.sampling_params.n
                 if "tools_kwargs" in non_tensor_batch.keys():
-                    non_tensor_batch["tools_kwargs"] = _repeat_interleave(non_tensor_batch["tools_kwargs"], self.sampling_params.n)
+                    non_tensor_batch["tools_kwargs"] = _repeat_interleave(non_tensor_batch["tools_kwargs"], self.sampling_params.n * self.sampling_params.n)
+                if "repo" in non_tensor_batch.keys():
+                    non_tensor_batch["repo"] = _repeat_interleave(non_tensor_batch["repo"], self.sampling_params.n * self.sampling_params.n)
+                    non_tensor_batch["base_commit"] = _repeat_interleave(non_tensor_batch["base_commit"], self.sampling_params.n * self.sampling_params.n)
 
-            seq = torch.cat([idx, response], dim=-1)
+            seq = torch.cat([patch_idx, patch_response], dim=-1)
 
-        response_length = response.size(1)
+        response_length = patch_response.size(1)
         delta_position_id = torch.arange(1, response_length + 1, device=position_ids.device)
         delta_position_id = delta_position_id.unsqueeze(0).expand(batch_size, -1)
         if position_ids.dim() == 3:  # qwen2vl mrope
@@ -294,14 +451,14 @@ class vLLMRollout(BaseRollout):
         # position_ids:   [0,0,0,0,0,1,2,3, | 4,5,6,7,8,9,10,11]
         response_position_ids = position_ids[..., -1:] + delta_position_id
         position_ids = torch.cat([position_ids, response_position_ids], dim=-1)
-        response_attention_mask = get_response_mask(response_id=response, eos_token=eos_token_id, dtype=attention_mask.dtype)
+        response_attention_mask = get_response_mask(response_id=patch_response, eos_token=eos_token_id, dtype=attention_mask.dtype)
         attention_mask = torch.cat((attention_mask, response_attention_mask), dim=-1)
 
         # all the tp ranks should contain the same data here. data in all ranks are valid
         batch = TensorDict(
             {
-                "prompts": idx,
-                "responses": response,
+                "prompts": patch_idx,
+                "responses": patch_response,
                 "input_ids": seq,  # here input_ids become the whole sentences
                 # 'old_log_probs': log_probs, # we will recompute old log prob with actor
                 "attention_mask": attention_mask,

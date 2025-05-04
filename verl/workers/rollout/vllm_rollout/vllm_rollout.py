@@ -379,7 +379,7 @@ class vLLMRollout(BaseRollout):
             patch_response = patch_output[0].to(idx.device)
 
             if patch_response.shape[1] < self.config.response_length:
-                response = pad_sequence_to_length(patch_response, self.config.response_length, self.pad_token_id)
+                patch_response = pad_sequence_to_length(patch_response, self.config.response_length, self.pad_token_id)
 
             # utilize current sampling params
             if self.sampling_params.n > 1 and do_sample:

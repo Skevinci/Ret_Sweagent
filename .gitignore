@@ -22,6 +22,8 @@ tensorflow/my_graph/*
 # Distribution / packaging
 .Python
 env/
+envs/
+pkgs/
 build/
 develop-eggs/
 dist/
