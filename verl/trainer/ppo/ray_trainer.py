@@ -590,6 +590,8 @@ class RayPPOTrainer:
                 batch_keys=batch_keys_to_pop,
                 non_tensor_batch_keys=non_tensor_batch_keys_to_pop,
             )
+            test_gen_batch.non_tensor_batch['repo'] = test_data['repo']
+            test_gen_batch.non_tensor_batch['base_commit'] = test_data['base_commit']
 
             test_gen_batch.meta_info = {
                 "eos_token_id": self.tokenizer.eos_token_id,
@@ -612,6 +614,11 @@ class RayPPOTrainer:
             # unpad
             test_output_gen_batch = unpad_dataproto(test_output_gen_batch_padded, pad_size=pad_size)
             print("validation generation end")
+            
+            if 'repo' in test_output_gen_batch.non_tensor_batch:
+                del test_output_gen_batch.non_tensor_batch['repo']
+            if 'base_commit' in test_output_gen_batch.non_tensor_batch:
+                del test_output_gen_batch.non_tensor_batch['base_commit']
 
             # Store generated outputs
             output_ids = test_output_gen_batch.batch["responses"]
@@ -891,7 +898,7 @@ class RayPPOTrainer:
 
                 # pop those keys for generation
                 batch_keys_to_pop = ["input_ids", "attention_mask", "position_ids"]
-                non_tensor_batch_keys_to_pop = ["raw_prompt_ids", "repo", "base_commit"]
+                non_tensor_batch_keys_to_pop = ["raw_prompt_ids"]
                 if "multi_modal_inputs" in batch.non_tensor_batch:
                     non_tensor_batch_keys_to_pop.extend(["multi_modal_data", "multi_modal_inputs"])
                 if "raw_prompt" in batch.non_tensor_batch:
@@ -902,6 +909,8 @@ class RayPPOTrainer:
                     batch_keys=batch_keys_to_pop,
                     non_tensor_batch_keys=non_tensor_batch_keys_to_pop,
                 )
+                gen_batch.non_tensor_batch['repo'] = batch_dict['repo']
+                gen_batch.non_tensor_batch['base_commit'] = batch_dict['base_commit']
 
                 is_last_step = self.global_steps >= self.total_training_steps
 
