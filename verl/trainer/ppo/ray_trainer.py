@@ -59,6 +59,8 @@ from verl.utils.torch_functional import masked_mean
 from verl.utils.tracking import ValidationGenerationsLogger
 from verl.workers.rollout.async_server import AsyncLLMServerManager
 
+import time
+
 WorkerType = Type[Worker]
 
 
@@ -907,7 +909,12 @@ class RayPPOTrainer:
                     # generate a batch
                     with _timer("gen", timing_raw):
                         if not self.async_rollout_mode:
+                            start_time = time.time()
+                            print("============== Start generation ==============")
                             gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
+                            end_time = time.time()
+                            print(f"============== End generation ==============")
+                            print(f"Generation time: {end_time - start_time} seconds")
                         else:
                             self.async_rollout_manager.wake_up()
                             gen_batch_output = self.async_rollout_manager.generate_sequences(gen_batch)
@@ -933,6 +940,11 @@ class RayPPOTrainer:
                     # repeat to align with repeated responses in rollout
                     batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
                     batch = batch.union(gen_batch_output)
+                    
+                    if 'repo' in gen_batch_output.non_tensor_batch:
+                        del gen_batch_output.non_tensor_batch['repo']
+                    if 'base_commit' in gen_batch_output.non_tensor_batch:
+                        del gen_batch_output.non_tensor_batch['base_commit']
 
                     batch.batch["response_mask"] = compute_response_mask(batch)
                     # balance the number of valid tokens on each dp rank.
@@ -953,33 +965,35 @@ class RayPPOTrainer:
                         if self.config.reward_model.launch_reward_fn_async:
                             future_reward = compute_reward_async.remote(batch, self.config, self.tokenizer)
                         else:
+                            start_time = time.time()
                             reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn)
+                            end_time = time.time()
+                            print(f"Reward computation time: {end_time - start_time} seconds")
 
                     # recompute old_log_probs
-                    with _timer("old_log_prob", timing_raw):
-                        old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
-                        entropys = old_log_prob.batch["entropys"]
-                        response_masks = batch.batch["response_mask"]
-                        loss_agg_mode = self.config.actor_rollout_ref.actor.loss_agg_mode
-                        entropy_loss = agg_loss(loss_mat=entropys, loss_mask=response_masks, loss_agg_mode=loss_agg_mode)
-                        old_log_prob_metrics = {"actor/entropy_loss": entropy_loss.detach().item()}
-                        metrics.update(old_log_prob_metrics)
-                        old_log_prob.batch.pop("entropys")
-                        batch = batch.union(old_log_prob)
+                    ## comment since don't use kl penalty
+                    # with _timer("old_log_prob", timing_raw):
+                    #     old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
+                    #     entropys = old_log_prob.batch["entropys"]
+                    #     response_masks = batch.batch["response_mask"]
+                    #     loss_agg_mode = self.config.actor_rollout_ref.actor.loss_agg_mode
+                    #     entropy_loss = agg_loss(loss_mat=entropys, loss_mask=response_masks, loss_agg_mode=loss_agg_mode)
+                    #     old_log_prob_metrics = {"actor/entropy_loss": entropy_loss.detach().item()}
+                    #     metrics.update(old_log_prob_metrics)
+                    #     old_log_prob.batch.pop("entropys")
+                    #     batch = batch.union(old_log_prob)
 
                     if self.use_reference_policy:
                         # compute reference log_prob
+                        start_time = time.time()
                         with _timer("ref", timing_raw):
                             ref_log_prob = self.ref_policy_wg.compute_ref_log_prob(batch)
                             batch = batch.union(ref_log_prob)
-
-                    # compute values
-                    if self.use_critic:
-                        with _timer("values", timing_raw):
-                            values = self.critic_wg.compute_values(batch)
-                            batch = batch.union(values)
+                        end_time = time.time()
+                        print(f"Reference log_prob computation time: {end_time - start_time} seconds")
 
                     with _timer("adv", timing_raw):
+                        start_time = time.time()
                         # we combine with rule-based rm
                         reward_extra_infos_dict: dict[str, list]
                         if self.config.reward_model.launch_reward_fn_async:
@@ -1010,26 +1024,25 @@ class RayPPOTrainer:
                             norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
                             multi_turn=self.config.actor_rollout_ref.rollout.multi_turn.enable,
                         )
-
-                    # update critic
-                    if self.use_critic:
-                        with _timer("update_critic", timing_raw):
-                            critic_output = self.critic_wg.update_critic(batch)
-                        critic_output_metrics = reduce_metrics(critic_output.meta_info["metrics"])
-                        metrics.update(critic_output_metrics)
+                        end_time = time.time()
+                        print(f"Advantage computation time: {end_time - start_time} seconds")
 
                     # implement critic warmup
                     if self.config.trainer.critic_warmup <= self.global_steps:
                         # update actor
+                        start_time = time.time()
                         with _timer("update_actor", timing_raw):
                             batch.meta_info["multi_turn"] = self.config.actor_rollout_ref.rollout.multi_turn.enable
                             actor_output = self.actor_rollout_wg.update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
                         metrics.update(actor_output_metrics)
+                        end_time = time.time()
+                        print(f"Actor update time: {end_time - start_time} seconds")
 
                     # Log rollout generations if enabled
                     rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)
                     if rollout_data_dir:
+                        start_time = time.time()
                         with _timer("dump_rollout_generations", timing_raw):
                             print(batch.batch.keys())
                             inputs = self.tokenizer.batch_decode(batch.batch["prompts"], skip_special_tokens=True)
@@ -1042,14 +1055,19 @@ class RayPPOTrainer:
                                 reward_extra_infos_dict=reward_extra_infos_dict,
                                 dump_path=rollout_data_dir,
                             )
+                        end_time = time.time()
+                        print(f"Dumping generations time: {end_time - start_time} seconds")
 
                     # validate
                     if self.val_reward_fn is not None and self.config.trainer.test_freq > 0 and (is_last_step or self.global_steps % self.config.trainer.test_freq == 0):
+                        start_time = time.time()
                         with _timer("testing", timing_raw):
                             val_metrics: dict = self._validate()
                             if is_last_step:
                                 last_val_metrics = val_metrics
                         metrics.update(val_metrics)
+                        end_time = time.time()
+                        print(f"Validation time: {end_time - start_time} seconds")
 
                     if self.config.trainer.save_freq > 0 and (is_last_step or self.global_steps % self.config.trainer.save_freq == 0):
                         with _timer("save_checkpoint", timing_raw):
