@@ -100,7 +100,7 @@ def compute_patch_reward(gt_patch, gen_patch, do_print, alpha=0.4, beta=0.1):
         print(f"Tree similarity: {S_tree}, Line similarity: {S_line}, Reward: {reward}")
     return reward
 
-def compute_score(solution_str, ground_truth, do_print, method='strict', format_score=0.1, score=1.):
+def compute_score(solution_str, ground_truth, method='strict', format_score=0.1, score=1.):
     """The scoring function for countdown task.
     
     Args:
@@ -110,21 +110,9 @@ def compute_score(solution_str, ground_truth, do_print, method='strict', format_
         format_score: the score for correct format but wrong answer
         score: the score for the correct answer
     """
-    if do_print:
-        model_output = extract_solution(solution_str=solution_str)
-        log_msg = (
-            "--------------------------------\n"
-            f"Model output: {model_output}\n"
-            "--------------------------------\n"
-            f"Target: {ground_truth}\n\n"
-        )
-        with log_lock:
-            with open("./output_log.txt", "a") as f:
-                f.write(log_msg)
-    else:
-        model_output = solution_str
-    # do_print = random.randint(1, 64) == 1
+    do_print = random.randint(1, 64) == 1
     # do_print = 1
+    model_output = solution_str
 
     if model_output is None:
         if do_print:

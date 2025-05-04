@@ -43,7 +43,10 @@ class NaiveRewardManager:
         reward_extra_info = defaultdict(list)
 
         already_print_data_sources = {}
+        print(f"Processing {len(data)} data items in total", file=sys.stderr)
 
+        tasks = []
+        valid_response_length_list = []
         for i in range(len(data)):
             data_item = data[i]  # DataProtoItem
 
