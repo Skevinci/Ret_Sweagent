@@ -2,7 +2,7 @@
 
 set -x
 export N_GPUS=4
-export BASE_MODEL="/shared/sikaili/Qwen2.5-0.5B"
+export BASE_MODEL="/nlp/data/sikaili/Qwen2.5-7B"
 export DATA_DIR="/home1/s/sikaili/data/auto_sweagent"
 export ROLLOUT_DIR="/home1/s/sikaili/Ret_Sweagent/rollout"
 export EXPERIMENT_NAME=test
@@ -36,7 +36,6 @@ export TMPDIR="/nlp/data/sikaili/tmp_ray"
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
     actor_rollout_ref.rollout.n=4 \
-    actor_rollout_ref.rollout.dtype=bfloat16 \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     reward_model.reward_manager=naive \
