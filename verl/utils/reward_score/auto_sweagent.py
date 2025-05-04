@@ -92,12 +92,11 @@ def compute_patch_reward(gt_patch, gen_patch, do_print, alpha=0.4, beta=0.1):
     # tree2 = parse_patch_to_tree(gen_patch)
     # S_tree = compute_tree_similarity(tree1, tree2)
     
-    S_line = compute_line_similarity(gt_patch, gen_patch)
+    reward = compute_line_similarity(gt_patch, gen_patch)
 
-    reward = alpha * S_tree + beta * S_line
     if do_print:
         print("================================")
-        print(f"Tree similarity: {S_tree}, Line similarity: {S_line}, Reward: {reward}")
+        print(f"Reward: {reward}")
     return reward
 
 def compute_score(solution_str, ground_truth, method='strict', format_score=0.1, score=1.):
@@ -129,6 +128,8 @@ def compute_score(solution_str, ground_truth, method='strict', format_score=0.1,
         if do_print:
             print(f"Invalid patch format")
         return format_score
+    
+    ground_truth = f"<patch>\n{ground_truth.strip()}\n</patch>"
     
     return compute_patch_reward(model_output_patch, ground_truth, do_print)
         
