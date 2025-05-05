@@ -227,6 +227,7 @@ class SGLangRollout(BaseRollout):
     @torch.no_grad()
     def generate_sequences(self, prompts: DataProto, **kwargs) -> DataProto:
         # if self.config.free_cache_engine:
+        print("=================== Using SGLang Rollout ===================")
 
         idx = prompts.batch["input_ids"]  # (bs, prompt_length)
         # left-padded attention_mask
@@ -235,6 +236,9 @@ class SGLangRollout(BaseRollout):
 
         # used to construct attention_mask
         eos_token_id = prompts.meta_info["eos_token_id"]
+        
+        repo_list = prompts.non_tensor_batch['repo']
+        base_commit_list = prompts.non_tensor_batch['base_commit']
 
         batch_size = idx.size(0)
 
@@ -280,21 +284,25 @@ class SGLangRollout(BaseRollout):
                 top_k=-1,
                 ignore_eos=False,
                 min_new_tokens=0,
-                max_new_tokens=self.config.response_length,
+                max_new_tokens=50,
                 skip_special_tokens=True,
                 spaces_between_special_tokens=True,
             )
         elif is_validate:
             kwargs = dict(
+                max_new_tokens=50,
                 top_k=self.config.val_kwargs.top_k,
                 top_p=self.config.val_kwargs.top_p,
                 temperature=self.config.val_kwargs.temperature,
                 n=1,  # if validate, already repeat in ray_trainer
             )
+        else:
+            kwargs = dict(
+                max_new_tokens=50
+            )
 
         # users can customize different sampling_params at different run
         with self.update_sampling_params(**kwargs):
-            print(f"{self.sampling_params=}")
             output = self.inference_engine.generate(
                 prompt=None,  # because we have already convert it to prompt token id
                 sampling_params=self.sampling_params,
@@ -303,26 +311,122 @@ class SGLangRollout(BaseRollout):
                 image_data=image_list,
             )
 
-            out = _post_process_outputs(self.tokenizer, output)
+        out = _post_process_outputs(self.tokenizer, output)
+        
+        query_response = out[0].to(idx.device)
+        
+        query_txt = self.tokenizer.batch_decode(query_response, skip_special_tokens=True)
+        
+        sample_n = self.sampling_params.n
+        query_list = []
+        repo_commit_list = []
+        for i in range(batch_size):
+            repo_commit_list.append((repo_list[i], base_commit_list[i]))
+            for j in range(sample_n):
+                idx_flat = i * sample_n + j
+                query_list.append(query_txt[idx_flat])
+        print(f"length of query_list: {len(query_list)}")
+        
+        start_time = time.time()
+        if do_sample:
+            contexts = batch_retrieve_train(query_list, repo_commit_list, sample_n, batch_size=128)
+        else:
+            contexts = batch_retrieve_test(query_list, repo_commit_list, batch_size=128)
+        end_time = time.time()
+        print(f"Time taken for batch retrieval: {end_time - start_time} seconds")
+        
+        context_data = self.tokenizer(contexts, return_tensors="pt", padding=True, truncation=True, max_length=5000, add_special_tokens=False).to(idx.device)
+        
+        patch_input_list = []
+        patch_input_ids_ts_list = []
+        attention_mask_list = []
+        for i in range(len(contexts)):
+            processed_query = list(query_response[i])
 
-            response = out[0].to(idx.device)
-            # log_probs = out[1].to(idx.device)
+            context_ids = context_data['input_ids'][i]
+            context_attention_mask = context_data['attention_mask'][i]
+            patch_input_ids = idx_list[i // sample_n] + processed_query + _pre_process_response(self.pad_token_id, context_ids)
 
-            if response.shape[1] < self.config.response_length:
-                response = pad_sequence_to_length(response, self.config.response_length, self.pad_token_id)
-                # log_probs = pad_sequence_to_length(log_probs, self.config.response_length, self.pad_token_id)
+            # print(f"Patch input ids: {patch_input_ids}")
+            patch_input_ids_ts = torch.tensor(patch_input_ids).to(idx.device)
+            attention_mask = (patch_input_ids_ts != self.pad_token_id).long()
+            
+            sequence_length = len(patch_input_ids_ts)
+            if sequence_length < self.config.prompt_length:
+                patch_input_ids_ts = verl_F.pad_sequence_to_length(patch_input_ids_ts, self.config.prompt_length, self.pad_token_id, left_pad=True)
+                attention_mask = verl_F.pad_sequence_to_length(attention_mask, self.config.prompt_length, 0, left_pad=True)
+            elif sequence_length > self.config.prompt_length:
+                patch_input_ids = patch_input_ids[:self.config.prompt_length]
+                patch_input_ids_ts = patch_input_ids_ts[:self.config.prompt_length]
+                attention_mask = attention_mask[:self.config.prompt_length]
+            
+            patch_input_list.append(patch_input_ids)
+            patch_input_ids_ts_list.append(patch_input_ids_ts)
+            attention_mask_list.append(attention_mask)
+            
+        patch_idx = torch.stack(patch_input_ids_ts_list, dim=0)
+        attention_mask = torch.stack(attention_mask_list, dim=0)
+        position_ids = compute_position_id_with_mask(attention_mask)
+        
+        if not do_sample:
+            kwargs = dict(
+                n=1,
+                presence_penalty=0.0,
+                frequency_penalty=0.0,
+                repetition_penalty=1.0,
+                temperature=0,
+                top_p=1,
+                top_k=-1,
+                ignore_eos=False,
+                min_new_tokens=0,
+                max_new_tokens=self.config.response_length,
+                skip_special_tokens=True,
+                spaces_between_special_tokens=True,
+            )
+        elif is_validate:
+            kwargs = dict(
+                max_new_tokens=self.config.response_length,
+                top_k=self.config.val_kwargs.top_k,
+                top_p=self.config.val_kwargs.top_p,
+                temperature=self.config.val_kwargs.temperature,
+                n=1,  # if validate, already repeat in ray_trainer
+            )
+        else:
+            kwargs = dict(
+                max_new_tokens=self.config.response_length
+            )
+        with self.update_sampling_params(**kwargs):
+            patch_output = self.inference_engine.generate(
+                prompt=None,  # because we have already convert it to prompt token id
+                sampling_params=self.sampling_params,
+                return_logprob=True,
+                input_ids=patch_input_list,
+                image_data=image_list,
+            )
 
-            # utilize current sampling params
-            if self.sampling_params.get("n", 1) > 1 and do_sample:
-                idx = idx.repeat_interleave(self.sampling_params["n"], dim=0)
-                attention_mask = attention_mask.repeat_interleave(self.sampling_params["n"], dim=0)
-                position_ids = position_ids.repeat_interleave(self.sampling_params["n"], dim=0)
-                batch_size = batch_size * self.sampling_params["n"]
-                if "multi_modal_inputs" in non_tensor_batch.keys():
-                    non_tensor_batch["multi_modal_inputs"] = np.repeat(non_tensor_batch["multi_modal_inputs"], self.sampling_params["n"], axis=0)
-            seq = torch.cat([idx, response], dim=-1)
+        patch_out = _post_process_outputs(self.tokenizer, patch_output)
 
-        response_length = response.size(1)
+        patch_response = patch_out[0].to(idx.device)
+        # log_probs = out[1].to(idx.device)
+
+        if patch_response.shape[1] < self.config.response_length:
+            patch_response = pad_sequence_to_length(patch_response, self.config.response_length, self.pad_token_id)
+            # log_probs = pad_sequence_to_length(log_probs, self.config.response_length, self.pad_token_id)
+
+        # utilize current sampling params
+        if self.sampling_params.get("n", 1) > 1 and do_sample:
+            patch_idx = patch_idx.repeat_interleave(self.sampling_params["n"], dim=0)
+            attention_mask = attention_mask.repeat_interleave(self.sampling_params["n"], dim=0)
+            position_ids = position_ids.repeat_interleave(self.sampling_params["n"], dim=0)
+            batch_size = batch_size * self.sampling_params["n"] * self.sampling_params["n"]
+            if "multi_modal_inputs" in non_tensor_batch.keys():
+                non_tensor_batch["multi_modal_inputs"] = np.repeat(non_tensor_batch["multi_modal_inputs"], self.sampling_params["n"], axis=0)
+            if "repo" in non_tensor_batch.keys():
+                non_tensor_batch["repo"] = np.repeat(non_tensor_batch["repo"], self.sampling_params.n * self.sampling_params.n, axis=0)
+                non_tensor_batch["base_commit"] = np.repeat(non_tensor_batch["base_commit"], self.sampling_params.n * self.sampling_params.n, axis=0)
+        seq = torch.cat([patch_idx, patch_response], dim=-1)
+
+        response_length = patch_response.size(1)
         delta_position_id = torch.arange(1, response_length + 1, device=position_ids.device)
         delta_position_id = delta_position_id.unsqueeze(0).repeat(batch_size, 1)
 
@@ -332,14 +436,14 @@ class SGLangRollout(BaseRollout):
         # position_ids:   [0,0,0,0,0,1,2,3, | 4,5,6,7,8,9,10,11]
         response_position_ids = position_ids[:, -1:] + delta_position_id
         position_ids = torch.cat([position_ids, response_position_ids], dim=-1)
-        response_attention_mask = get_response_mask(response_id=response, eos_token=eos_token_id, dtype=attention_mask.dtype)
+        response_attention_mask = get_response_mask(response_id=patch_response, eos_token=eos_token_id, dtype=attention_mask.dtype)
         attention_mask = torch.cat((attention_mask, response_attention_mask), dim=-1)
 
         # all the tp ranks should contain the same data here. data in all ranks are valid
         batch = TensorDict(
             {
-                "prompts": idx,
-                "responses": response,
+                "prompts": patch_idx,
+                "responses": patch_response,
                 "input_ids": seq,  # here input_ids become the whole sentences
                 # 'old_log_probs': log_probs, # we will recompute old log prob with actor
                 "attention_mask": attention_mask,

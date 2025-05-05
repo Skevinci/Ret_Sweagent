@@ -55,6 +55,8 @@ from verl.workers.rollout.base import BaseRollout
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
+QWEN_VOCAB=151664
+
 def retrieve_context_train(query, repo_commit):
     url = "https://cogcomp.seas.upenn.edu/ow4008/retrieve"
     data = {"query": query, "repo_commit": repo_commit}
@@ -127,6 +129,9 @@ def _repeat_interleave(value: Union[torch.Tensor, np.ndarray], repeats: int) -> 
         return value.repeat_interleave(repeats, dim=0)
     else:
         return np.repeat(value, repeats, axis=0)
+    
+def has_oov_token(token_ids_list, vocab_size=QWEN_VOCAB):
+    return any(token_id > vocab_size for token_id in token_ids_list)
 
 
 class vLLMRollout(BaseRollout):
@@ -319,11 +324,14 @@ class vLLMRollout(BaseRollout):
             }
         else:
             kwargs = {
-                'max_tokens': 50
+                'top_p': 0.95,
+                'top_k': 5000,
+                'max_tokens': 50,
             }
 
         # users can customize different sampling_params at different run
         with self.update_sampling_params(**kwargs):
+            # while True:
             outputs = self.inference_engine.generate(
                 prompts=vllm_inputs,  # because we have already convert it to prompt token id
                 sampling_params=self.sampling_params,
@@ -331,113 +339,146 @@ class vLLMRollout(BaseRollout):
             )
 
             query_response = []
+            has_any_oov = False
             for output in outputs:
                 for sample_id in range(len(output.outputs)):
-                    query_response.append(output.outputs[sample_id].token_ids)
+                    token_ids = output.outputs[sample_id].token_ids
+                    if has_oov_token(token_ids):
+                        has_any_oov = True
+                        break
+                    query_response.append(token_ids)
+                if has_any_oov:
+                    break
+            if has_any_oov:
+                print("OOV token detected, regenerating...")
+                # continue
+            # break
             
-            query_txt = self.tokenizer.batch_decode(query_response, skip_special_tokens=True)
+        query_txt = self.tokenizer.batch_decode(query_response, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+        
+        sample_n = self.sampling_params.n
+        query_list = []
+        repo_commit_list = []
+        for i in range(batch_size):
+            repo_commit_list.append((repo_list[i], base_commit_list[i]))
+            for j in range(sample_n):
+                idx_flat = i * sample_n + j
+                query_list.append(query_txt[idx_flat])
+        print(f"length of query_list: {len(query_list)}")
+        
+        start_time = time.time()
+        if do_sample:
+            contexts = batch_retrieve_train(query_list, repo_commit_list, sample_n, batch_size=128)
+        else:
+            contexts = batch_retrieve_test(query_list, repo_commit_list, batch_size=128)
+        end_time = time.time()
+        print(f"Time taken for batch retrieval: {end_time - start_time} seconds")
             
-            sample_n = self.sampling_params.n
-            query_list = []
-            repo_commit_list = []
-            for i in range(batch_size):
-                repo_commit_list.append((repo_list[i], base_commit_list[i]))
-                for j in range(sample_n):
-                    idx_flat = i * sample_n + j
-                    query_list.append(query_txt[idx_flat])
-            print(f"length of query_list: {len(query_list)}")
-            
-            start_time = time.time()
-            if do_sample:
-                contexts = batch_retrieve_train(query_list, repo_commit_list, sample_n, batch_size=128)
-            else:
-                contexts = batch_retrieve_test(query_list, repo_commit_list, batch_size=128)
-            end_time = time.time()
-            print(f"Time taken for batch retrieval: {end_time - start_time} seconds")
-                
-            context_data = self.tokenizer(contexts, return_tensors="pt", padding=True, truncation=True, max_length=5000, add_special_tokens=False).to(idx.device)
-            
-            patch_input_list = []
-            patch_input_ids_ts_list = []
-            attention_mask_list = []
-            for i in range(len(contexts)):
-                processed_query = list(query_response[i])
+        context_data = self.tokenizer(contexts, return_tensors="pt", padding=True, truncation=True, max_length=5000, add_special_tokens=False).to(idx.device)
+        
+        patch_input_list = []
+        patch_input_ids_ts_list = []
+        attention_mask_list = []
+        for i in range(len(contexts)):
+            processed_query = list(query_response[i])
 
-                context_ids = context_data['input_ids'][i]
-                context_attention_mask = context_data['attention_mask'][i]
-                patch_input_ids = idx_list[i // sample_n] + processed_query + _pre_process_response(self.pad_token_id, context_ids)
-                patch_input_ids_ts = torch.tensor(patch_input_ids).to(idx.device)
-                attention_mask = (patch_input_ids_ts != self.pad_token_id).long()
-                
-                sequence_length = len(patch_input_ids_ts)
-                if sequence_length < self.config.prompt_length:
-                    patch_input_ids_ts = verl_F.pad_sequence_to_length(patch_input_ids_ts, self.config.prompt_length, self.pad_token_id, left_pad=True)
-                    attention_mask = verl_F.pad_sequence_to_length(attention_mask, self.config.prompt_length, 0, left_pad=True)
-                elif sequence_length > self.config.prompt_length:
-                    patch_input_ids = patch_input_ids[:self.config.prompt_length]
-                    patch_input_ids_ts = patch_input_ids_ts[:self.config.prompt_length]
-                    attention_mask = attention_mask[:self.config.prompt_length]
-                
-                patch_input_list.append(patch_input_ids)
-                patch_input_ids_ts_list.append(patch_input_ids_ts)
-                attention_mask_list.append(attention_mask)
-                
-            patch_idx = torch.stack(patch_input_ids_ts_list, dim=0)
-            attention_mask = torch.stack(attention_mask_list, dim=0)
-            position_ids = compute_position_id_with_mask(attention_mask)
+            context_ids = context_data['input_ids'][i]
+            context_attention_mask = context_data['attention_mask'][i]
+            patch_input_ids = idx_list[i // sample_n] + processed_query + _pre_process_response(self.pad_token_id, context_ids)
+
+            # print(f"Patch input ids: {patch_input_ids}")
+            patch_input_ids_ts = torch.tensor(patch_input_ids).to(idx.device)
+            attention_mask = (patch_input_ids_ts != self.pad_token_id).long()
             
-            # convert to vllm input
-            vllm_inputs = [{"prompt_token_ids": patch_input_list[i]} for i in range(len(patch_input_list))]
+            sequence_length = len(patch_input_ids_ts)
+            if sequence_length < self.config.prompt_length:
+                patch_input_ids_ts = verl_F.pad_sequence_to_length(patch_input_ids_ts, self.config.prompt_length, self.pad_token_id, left_pad=True)
+                attention_mask = verl_F.pad_sequence_to_length(attention_mask, self.config.prompt_length, 0, left_pad=True)
+            elif sequence_length > self.config.prompt_length:
+                patch_input_ids = patch_input_ids[:self.config.prompt_length]
+                patch_input_ids_ts = patch_input_ids_ts[:self.config.prompt_length]
+                attention_mask = attention_mask[:self.config.prompt_length]
             
-            if not do_sample:
-                kwargs = {
-                    'max_tokens': self.config.response_length,
-                    'best_of': 1,
-                    'top_p': 1.0,
-                    'top_k': -1,
-                    'min_p': 0.0,
-                    'temperature': 0,
-                    'n': 1  # if greedy, only 1 response
-                }
-            elif is_validate:
-                kwargs = {
-                    'max_tokens': self.config.response_length,
-                    "top_k": self.config.val_kwargs.top_k,
-                    "top_p": self.config.val_kwargs.top_p,
-                    "temperature": self.config.val_kwargs.temperature,
-                    "n": 1,  # if validate, already repeat in ray_trainer
-                }
-            else:
-                kwargs = {
-                    'max_tokens': self.config.response_length,
-                }
-                
-            with self.update_sampling_params(**kwargs):
+            patch_input_list.append(patch_input_ids)
+            patch_input_ids_ts_list.append(patch_input_ids_ts)
+            attention_mask_list.append(attention_mask)
+            
+        patch_idx = torch.stack(patch_input_ids_ts_list, dim=0)
+        attention_mask = torch.stack(attention_mask_list, dim=0)
+        position_ids = compute_position_id_with_mask(attention_mask)
+        
+        # convert to vllm input
+        vllm_inputs = [{"prompt_token_ids": patch_input_list[i]} for i in range(len(patch_input_list))]
+        
+        if not do_sample:
+            kwargs = {
+                'max_tokens': self.config.response_length,
+                'best_of': 1,
+                'top_p': 1.0,
+                'top_k': -1,
+                'min_p': 0.0,
+                'temperature': 0,
+                'n': 1  # if greedy, only 1 response
+            }
+        elif is_validate:
+            kwargs = {
+                'max_tokens': self.config.response_length,
+                "top_k": self.config.val_kwargs.top_k,
+                "top_p": self.config.val_kwargs.top_p,
+                "temperature": self.config.val_kwargs.temperature,
+                "n": 1,  # if validate, already repeat in ray_trainer
+            }
+        else:
+            kwargs = {
+                'top_p': 0.95,
+                'top_k': 5000,
+                'max_tokens': self.config.response_length,
+            }
+            
+        with self.update_sampling_params(**kwargs):
+            while True:
                 outputs = self.inference_engine.generate(
-                    prompts=vllm_inputs,
+                    prompts=vllm_inputs,  # because we have already convert it to prompt token id
                     sampling_params=self.sampling_params,
                     use_tqdm=False,
                 )
-            
-            patch_response = []
-            for output in outputs:
-                for sample_id in range(len(output.outputs)):
-                    patch_response.append(output.outputs[sample_id].token_ids)
 
-            patch_response = pad_2d_list_to_length(patch_response, self.pad_token_id, max_length=self.config.response_length).to(idx.device)
+                patch_response = []
+                has_any_oov = False
+                for output in outputs:
+                    print(f"output: {output}")
+                    for sample_id in range(len(output.outputs)):
+                        token_ids = output.outputs[sample_id].token_ids
+                        if has_oov_token(token_ids):
+                            has_any_oov = True
+                            break
+                        patch_response.append(token_ids)
+                    if has_any_oov:
+                        break
+                if has_any_oov:
+                    print("OOV token detected in second stage, regenerating...")
+                    continue
+                break
+        
+        # patch_response = []
+        # for output in outputs:
+        #     for sample_id in range(len(output.outputs)):
+        #         patch_response.append(output.outputs[sample_id].token_ids)
 
-            if self.sampling_params.n > 1 and do_sample:
-                patch_idx = _repeat_interleave(patch_idx, self.sampling_params.n)
-                attention_mask = _repeat_interleave(attention_mask, self.sampling_params.n)
-                position_ids = _repeat_interleave(position_ids, self.sampling_params.n)
-                batch_size = batch_size * self.sampling_params.n * self.sampling_params.n
-                if "tools_kwargs" in non_tensor_batch.keys():
-                    non_tensor_batch["tools_kwargs"] = _repeat_interleave(non_tensor_batch["tools_kwargs"], self.sampling_params.n * self.sampling_params.n)
-                if "repo" in non_tensor_batch.keys():
-                    non_tensor_batch["repo"] = _repeat_interleave(non_tensor_batch["repo"], self.sampling_params.n * self.sampling_params.n)
-                    non_tensor_batch["base_commit"] = _repeat_interleave(non_tensor_batch["base_commit"], self.sampling_params.n * self.sampling_params.n)
+        patch_response = pad_2d_list_to_length(patch_response, self.pad_token_id, max_length=self.config.response_length).to(idx.device)
 
-            seq = torch.cat([patch_idx, patch_response], dim=-1)
+        if self.sampling_params.n > 1 and do_sample:
+            patch_idx = _repeat_interleave(patch_idx, self.sampling_params.n)
+            attention_mask = _repeat_interleave(attention_mask, self.sampling_params.n)
+            position_ids = _repeat_interleave(position_ids, self.sampling_params.n)
+            batch_size = batch_size * self.sampling_params.n * self.sampling_params.n
+            if "tools_kwargs" in non_tensor_batch.keys():
+                non_tensor_batch["tools_kwargs"] = _repeat_interleave(non_tensor_batch["tools_kwargs"], self.sampling_params.n * self.sampling_params.n)
+            if "repo" in non_tensor_batch.keys():
+                non_tensor_batch["repo"] = _repeat_interleave(non_tensor_batch["repo"], self.sampling_params.n * self.sampling_params.n)
+                non_tensor_batch["base_commit"] = _repeat_interleave(non_tensor_batch["base_commit"], self.sampling_params.n * self.sampling_params.n)
+
+        seq = torch.cat([patch_idx, patch_response], dim=-1)
 
         response_length = patch_response.size(1)
         delta_position_id = torch.arange(1, response_length + 1, device=position_ids.device)
