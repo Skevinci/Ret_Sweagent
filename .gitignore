@@ -24,6 +24,7 @@ tensorflow/my_graph/*
 env/
 envs/
 pkgs/
+rollout/
 build/
 develop-eggs/
 dist/
