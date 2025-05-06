@@ -191,6 +191,7 @@ class vLLMRollout(BaseRollout):
             model=model_path,
             enable_sleep_mode=True,
             tensor_parallel_size=tensor_parallel_size,
+            data_parallel_size=8,
             distributed_executor_backend="external_launcher",
             dtype=config.dtype,
             enforce_eager=config.enforce_eager,
