@@ -324,39 +324,25 @@ class vLLMRollout(BaseRollout):
             }
         else:
             kwargs = {
-                'top_p': 0.95,
-                'top_k': 5000,
                 'max_tokens': 50,
             }
 
         # users can customize different sampling_params at different run
         with self.update_sampling_params(**kwargs):
-            # while True:
             outputs = self.inference_engine.generate(
                 prompts=vllm_inputs,  # because we have already convert it to prompt token id
                 sampling_params=self.sampling_params,
                 use_tqdm=False,
             )
-
             query_response = []
-            has_any_oov = False
             for output in outputs:
                 for sample_id in range(len(output.outputs)):
                     token_ids = output.outputs[sample_id].token_ids
-                    if has_oov_token(token_ids):
-                        has_any_oov = True
-                        break
                     query_response.append(token_ids)
-                if has_any_oov:
-                    break
-            if has_any_oov:
-                print("OOV token detected, regenerating...")
-                # continue
-            # break
             
         query_txt = self.tokenizer.batch_decode(query_response, skip_special_tokens=True, clean_up_tokenization_spaces=False)
         
-        sample_n = self.sampling_params.n
+        sample_n = self.sampling_params.n if do_sample else 1
         query_list = []
         repo_commit_list = []
         for i in range(batch_size):
@@ -430,40 +416,20 @@ class vLLMRollout(BaseRollout):
             }
         else:
             kwargs = {
-                'top_p': 0.95,
-                'top_k': 5000,
                 'max_tokens': self.config.response_length,
             }
             
         with self.update_sampling_params(**kwargs):
-            while True:
-                outputs = self.inference_engine.generate(
-                    prompts=vllm_inputs,  # because we have already convert it to prompt token id
-                    sampling_params=self.sampling_params,
-                    use_tqdm=False,
-                )
-
-                patch_response = []
-                has_any_oov = False
-                for output in outputs:
-                    print(f"output: {output}")
-                    for sample_id in range(len(output.outputs)):
-                        token_ids = output.outputs[sample_id].token_ids
-                        if has_oov_token(token_ids):
-                            has_any_oov = True
-                            break
-                        patch_response.append(token_ids)
-                    if has_any_oov:
-                        break
-                if has_any_oov:
-                    print("OOV token detected in second stage, regenerating...")
-                    continue
-                break
+            outputs = self.inference_engine.generate(
+                prompts=vllm_inputs,  # because we have already convert it to prompt token id
+                sampling_params=self.sampling_params,
+                use_tqdm=False,
+            )
         
-        # patch_response = []
-        # for output in outputs:
-        #     for sample_id in range(len(output.outputs)):
-        #         patch_response.append(output.outputs[sample_id].token_ids)
+        patch_response = []
+        for output in outputs:
+            for sample_id in range(len(output.outputs)):
+                patch_response.append(output.outputs[sample_id].token_ids)
 
         patch_response = pad_2d_list_to_length(patch_response, self.pad_token_id, max_length=self.config.response_length).to(idx.device)
 

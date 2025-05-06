@@ -1,9 +1,8 @@
 #!/bin/bash
 
 set -x
-export CUDA_VISIBLE_DEVICES=4,5,6,7
 export SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK=True
-export N_GPUS=4
+export N_GPUS=8
 export BASE_MODEL="/shared/sikaili/Qwen2.5-0.5B"
 export DATA_DIR="/home1/s/sikaili/data/auto_sweagent"
 export ROLLOUT_DIR="/home1/s/sikaili/Ret_Sweagent/rollout"
@@ -14,7 +13,7 @@ export REWARD_PATH="/home1/s/sikaili/Ret_Sweagent/verl/utils/reward_score/__init
     algorithm.adv_estimator=grpo \
     data.train_files=$DATA_DIR/train.parquet \
     data.val_files=$DATA_DIR/test.parquet \
-    data.train_batch_size=4 \
+    data.train_batch_size=8 \
     data.max_prompt_length=5000 \
     data.max_response_length=2048 \
     actor_rollout_ref.rollout.name=sglang \
@@ -49,7 +48,7 @@ export REWARD_PATH="/home1/s/sikaili/Ret_Sweagent/verl/utils/reward_score/__init
     trainer.project_name='test' \
     trainer.experiment_name='test' \
     trainer.val_before_train=False \
-    trainer.n_gpus_per_node=4 \
+    trainer.n_gpus_per_node=8 \
     trainer.nnodes=1 \
     trainer.save_freq=3 \
     trainer.test_freq=2 \

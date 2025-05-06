@@ -1046,7 +1046,7 @@ class RayPPOTrainer:
 
                     # Log rollout generations if enabled
                     rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)
-                    if rollout_data_dir:
+                    if rollout_data_dir and self.global_steps % 2 == 0:
                         start_time = time.time()
                         with _timer("dump_rollout_generations", timing_raw):
                             print(batch.batch.keys())
