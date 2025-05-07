@@ -1046,7 +1046,7 @@ class RayPPOTrainer:
 
                     # Log rollout generations if enabled
                     rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)
-                    if rollout_data_dir and self.global_steps % 2 == 0:
+                    if rollout_data_dir and self.global_steps % 5 == 0:
                         start_time = time.time()
                         with _timer("dump_rollout_generations", timing_raw):
                             print(batch.batch.keys())
@@ -1076,7 +1076,10 @@ class RayPPOTrainer:
 
                     if self.config.trainer.save_freq > 0 and (is_last_step or self.global_steps % self.config.trainer.save_freq == 0):
                         with _timer("save_checkpoint", timing_raw):
+                            start_time = time.time()
                             self._save_checkpoint()
+                            end_time = time.time()
+                            print(f"Save ckpt time: {end_time - start_time} seconds")
 
                 # training metrics
                 metrics.update(

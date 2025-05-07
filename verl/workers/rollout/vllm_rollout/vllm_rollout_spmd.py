@@ -191,7 +191,6 @@ class vLLMRollout(BaseRollout):
             model=model_path,
             enable_sleep_mode=True,
             tensor_parallel_size=tensor_parallel_size,
-            data_parallel_size=8,
             distributed_executor_backend="external_launcher",
             dtype=config.dtype,
             enforce_eager=config.enforce_eager,
@@ -355,9 +354,9 @@ class vLLMRollout(BaseRollout):
         
         start_time = time.time()
         if do_sample:
-            contexts = batch_retrieve_train(query_list, repo_commit_list, sample_n, batch_size=128)
+            contexts = batch_retrieve_train(query_list, repo_commit_list, sample_n, batch_size=512)
         else:
-            contexts = batch_retrieve_test(query_list, repo_commit_list, batch_size=128)
+            contexts = batch_retrieve_test(query_list, repo_commit_list, batch_size=512)
         end_time = time.time()
         print(f"Time taken for batch retrieval: {end_time - start_time} seconds")
             

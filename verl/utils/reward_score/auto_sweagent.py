@@ -109,7 +109,7 @@ def compute_score(solution_str, ground_truth, method='strict', format_score=0.1,
         format_score: the score for correct format but wrong answer
         score: the score for the correct answer
     """
-    do_print = random.randint(1, 64) == 1
+    do_print = 0
     # do_print = 1
     model_output = solution_str
 
