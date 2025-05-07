@@ -1,0 +1,52 @@
+cpu-bind=MASK - nlpgpu10, task  0  0 [11116]: mask 0xffffffffffffffff set
++ export N_GPUS=8
++ N_GPUS=8
++ export BASE_MODEL=/nlp/data/sikaili/Qwen2.5-7B
++ BASE_MODEL=/nlp/data/sikaili/Qwen2.5-7B
++ export DATA_DIR=/nlp/data/sikaili/TinyZero-swebench/data/auto_sweagent
++ DATA_DIR=/nlp/data/sikaili/TinyZero-swebench/data/auto_sweagent
++ export ROLLOUT_DIR=/nlp/data/sikaili/Ret_Sweagent/rollout
++ ROLLOUT_DIR=/nlp/data/sikaili/Ret_Sweagent/rollout
++ export EXPERIMENT_NAME=nlpgpu-experiment
++ EXPERIMENT_NAME=nlpgpu-experiment
++ export REWARD_PATH=/nlp/data/sikaili/Ret_Sweagent/verl/utils/reward_score/__init__.py
++ REWARD_PATH=/nlp/data/sikaili/Ret_Sweagent/verl/utils/reward_score/__init__.py
++ export TMPDIR=/nlp/data/sikaili/tmp_ray_rm
++ TMPDIR=/nlp/data/sikaili/tmp_ray_rm
++ /shared/sikaili/.conda/envs/verl/bin/python3 -m verl.trainer.main_ppo algorithm.adv_estimator=grpo data.train_files=/nlp/data/sikaili/TinyZero-swebench/data/auto_sweagent/train.parquet data.val_files=/nlp/data/sikaili/TinyZero-swebench/data/auto_sweagent/test.parquet data.train_batch_size=1024 data.max_prompt_length=5000 data.max_response_length=2048 actor_rollout_ref.model.path=/nlp/data/sikaili/Qwen2.5-7B actor_rollout_ref.actor.optim.lr=1e-6 actor_rollout_ref.model.use_remove_padding=True actor_rollout_ref.actor.ppo_mini_batch_size=256 actor_rollout_ref.actor.use_dynamic_bsz=True actor_rollout_ref.actor.ppo_max_token_len_per_gpu=14096 actor_rollout_ref.actor.use_kl_loss=True actor_rollout_ref.actor.kl_loss_coef=0.001 actor_rollout_ref.actor.kl_loss_type=low_var_kl actor_rollout_ref.model.enable_gradient_checkpointing=True actor_rollout_ref.actor.fsdp_config.param_offload=False actor_rollout_ref.actor.fsdp_config.optimizer_offload=False actor_rollout_ref.rollout.tensor_model_parallel_size=2 actor_rollout_ref.rollout.disable_log_stats=False actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=14096 actor_rollout_ref.rollout.name=vllm actor_rollout_ref.rollout.gpu_memory_utilization=0.6 actor_rollout_ref.rollout.n=3 actor_rollout_ref.rollout.enforce_eager=False actor_rollout_ref.rollout.free_cache_engine=False actor_rollout_ref.ref.fsdp_config.param_offload=True reward_model.reward_manager=naive custom_reward_function.path=/nlp/data/sikaili/Ret_Sweagent/verl/utils/reward_score/__init__.py custom_reward_function.name=_default_compute_score algorithm.kl_ctrl.kl_coef=0.001 trainer.critic_warmup=0 trainer.rollout_data_dir=/nlp/data/sikaili/Ret_Sweagent/rollout 'trainer.logger=[console,wandb]' trainer.project_name=ec2_train trainer.experiment_name=nlpgpu10_0506 trainer.val_before_train=False trainer.n_gpus_per_node=8 trainer.nnodes=1 trainer.save_freq=5 trainer.test_freq=5 trainer.default_hdfs_dir=null trainer.total_epochs=15
+2025-05-06 16:18:00,104	INFO worker.py:1879 -- Started a local Ray instance. View the dashboard at [1m[32m127.0.0.1:8265 [39m[22m
+[36m(TaskRunner pid=15792)[0m DeprecationWarning: `ray.state.available_resources_per_node` is a private attribute and access will be removed in a future Ray version.
+[36m(TaskRunner pid=15792)[0m WARNING:2025-05-06 16:18:42,060:Waiting for register center actor ShaPEX_register_center to be ready. Elapsed time: 0 seconds out of 300 seconds.
+[36m(WorkerDict pid=17124)[0m You are attempting to use Flash Attention 2.0 with a model not initialized on GPU. Make sure to move the model to GPU after initializing it on CPU with `model.to('cuda')`.
+[36m(WorkerDict pid=17124)[0m Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s]
+[36m(WorkerDict pid=17124)[0m Loading checkpoint shards:  25%|██▌       | 1/4 [00:00<00:01,  2.33it/s]
+[36m(WorkerDict pid=17124)[0m Loading checkpoint shards: 100%|██████████| 4/4 [00:01<00:00,  2.18it/s]Loading checkpoint shards: 100%|██████████| 4/4 [00:01<00:00,  2.12it/s]
+[36m(WorkerDict pid=17124)[0m [rank0]:[W506 16:19:27.425405603 ProcessGroupNCCL.cpp:4561] [PG ID 0 PG GUID 0 Rank 0]  using GPU 0 to perform barrier as devices used by this process are currently unknown. This can potentially cause a hang if this rank to GPU mapping is incorrect. Specify device_ids in barrier() to force use of a particular device, or call init_process_group() with a device_id.
+[36m(WorkerDict pid=17124)[0m Flash Attention 2.0 only supports torch.float16 and torch.bfloat16 dtypes, but the current dype in Qwen2ForCausalLM is torch.float32. You should run training or inference using Automatic Mixed-Precision via the `with torch.autocast(device_type='torch_device'):` decorator, or load the model with the `torch_dtype` argument. Example: `model = AutoModel.from_pretrained("openai/whisper-tiny", attn_implementation="flash_attention_2", torch_dtype=torch.float16)`
+[36m(WorkerDict pid=17299)[0m You are attempting to use Flash Attention 2.0 with a model not initialized on GPU. Make sure to move the model to GPU after initializing it on CPU with `model.to('cuda')`.[32m [repeated 7x across cluster][0m
+[36m(WorkerDict pid=17124)[0m Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s][32m [repeated 8x across cluster][0m
+[36m(WorkerDict pid=17299)[0m Loading checkpoint shards:  75%|███████▌  | 3/4 [00:01<00:00,  1.92it/s][32m [repeated 23x across cluster][0m
+[36m(WorkerDict pid=17299)[0m Loading checkpoint shards: 100%|██████████| 4/4 [00:01<00:00,  2.17it/s]Loading checkpoint shards: 100%|██████████| 4/4 [00:01<00:00,  2.10it/s][32m [repeated 7x across cluster][0m
+[36m(WorkerDict pid=17298)[0m [rank6]:[W506 16:19:28.304474593 ProcessGroupNCCL.cpp:4561] [PG ID 0 PG GUID 0 Rank 6]  using GPU 0 to perform barrier as devices used by this process are currently unknown. This can potentially cause a hang if this rank to GPU mapping is incorrect. Specify device_ids in barrier() to force use of a particular device, or call init_process_group() with a device_id.[32m [repeated 7x across cluster][0m
+[36m(WorkerDict pid=17299)[0m Flash Attention 2.0 only supports torch.float16 and torch.bfloat16 dtypes, but the current dype in Qwen2ForCausalLM is torch.float32. You should run training or inference using Automatic Mixed-Precision via the `with torch.autocast(device_type='torch_device'):` decorator, or load the model with the `torch_dtype` argument. Example: `model = AutoModel.from_pretrained("openai/whisper-tiny", attn_implementation="flash_attention_2", torch_dtype=torch.float16)`[32m [repeated 7x across cluster][0m
+[36m(WorkerDict pid=17299)[0m Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s][32m [repeated 7x across cluster][0m
+[36m(WorkerDict pid=17293)[0m Loading checkpoint shards:  50%|█████     | 2/4 [00:05<00:05,  2.67s/it][32m [repeated 9x across cluster][0m
+[36m(WorkerDict pid=17124)[0m Loading checkpoint shards: 100%|██████████| 4/4 [00:10<00:00,  2.52s/it]Loading checkpoint shards: 100%|██████████| 4/4 [00:10<00:00,  2.56s/it]
+[36m(WorkerDict pid=17124)[0m 2025-05-06 16:22:43,873 - INFO - flashinfer.jit: Prebuilt kernels not found, using JIT backend
+[36m(WorkerDict pid=17299)[0m Loading checkpoint shards:  75%|███████▌  | 3/4 [00:07<00:02,  2.62s/it][32m [repeated 15x across cluster][0m
+[36m(WorkerDict pid=17299)[0m Loading checkpoint shards: 100%|██████████| 4/4 [00:10<00:00,  2.52s/it]Loading checkpoint shards: 100%|██████████| 4/4 [00:10<00:00,  2.57s/it][32m [repeated 7x across cluster][0m
+[36m(WorkerDict pid=17294)[0m /shared/sikaili/.conda/envs/verl/lib/python3.10/site-packages/torch/distributed/fsdp/fully_sharded_data_parallel.py:690: FutureWarning: FSDP.state_dict_type() and FSDP.set_state_dict_type() are being deprecated. Please use APIs, get_state_dict() and set_state_dict(), which can support different parallelisms, FSDP1, FSDP2, DDP. API doc: https://pytorch.org/docs/stable/distributed.checkpoint.html#torch.distributed.checkpoint.state_dict.get_state_dict .Tutorial: https://pytorch.org/tutorials/recipes/distributed_checkpoint_recipe.html .
+[36m(WorkerDict pid=17294)[0m   warnings.warn(
+[36m(WorkerDict pid=17299)[0m 2025-05-06 16:22:43,873 - INFO - flashinfer.jit: Prebuilt kernels not found, using JIT backend[32m [repeated 7x across cluster][0m
+[36m(TaskRunner pid=15792)[0m wandb: Currently logged in as: sikaili (sikaili-university-of-pennsylvania) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+[36m(WorkerDict pid=17124)[0m /shared/sikaili/.conda/envs/verl/lib/python3.10/site-packages/torch/distributed/fsdp/fully_sharded_data_parallel.py:690: FutureWarning: FSDP.state_dict_type() and FSDP.set_state_dict_type() are being deprecated. Please use APIs, get_state_dict() and set_state_dict(), which can support different parallelisms, FSDP1, FSDP2, DDP. API doc: https://pytorch.org/docs/stable/distributed.checkpoint.html#torch.distributed.checkpoint.state_dict.get_state_dict .Tutorial: https://pytorch.org/tutorials/recipes/distributed_checkpoint_recipe.html .[32m [repeated 7x across cluster][0m
+[36m(WorkerDict pid=17124)[0m   warnings.warn([32m [repeated 7x across cluster][0m
+[36m(TaskRunner pid=15792)[0m wandb: Tracking run with wandb version 0.19.10
+[36m(TaskRunner pid=15792)[0m wandb: Run data is saved locally in /mnt/nlpgridio3/data/sikaili/Ret_Sweagent/wandb/run-20250506_162405-122x8cht
+[36m(TaskRunner pid=15792)[0m wandb: Run `wandb offline` to turn off syncing.
+[36m(TaskRunner pid=15792)[0m wandb: Syncing run nlpgpu10_0506
+[36m(TaskRunner pid=15792)[0m wandb: ⭐️ View project at https://wandb.ai/sikaili-university-of-pennsylvania/ec2_train
+[36m(TaskRunner pid=15792)[0m wandb: 🚀 View run at https://wandb.ai/sikaili-university-of-pennsylvania/ec2_train/runs/122x8cht
+[36m(TaskRunner pid=15792)[0m Training Progress:   0%|          | 0/195 [00:00<?, ?it/s]
+[36m(TaskRunner pid=15792)[0m ============== Start generation ==============
+slurmstepd: error: *** JOB 112703 ON nlpgpu10 CANCELLED AT 2025-05-06T16:30:13 ***

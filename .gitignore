@@ -1,5 +1,5 @@
 
-**/*.pt
+# **/*.pt
 # **/checkpoints
 **/wget-log
 **/_build/

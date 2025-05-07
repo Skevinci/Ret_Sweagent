@@ -15,7 +15,7 @@
 
 
 def _default_compute_score(data_source, solution_str, ground_truth, extra_info=None):
-    if data_source == "auto_sweagent":
+    if data_source == "auto_sweagent" or data_source == "swe_eval":
         from . import auto_sweagent
         
         res = auto_sweagent.compute_score(solution_str, ground_truth)
