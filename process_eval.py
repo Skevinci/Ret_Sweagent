@@ -5,9 +5,9 @@ from pathlib import Path
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
-INPUT_FILE = "./val_rollout/0.json"  # or input.json if it's a list
+INPUT_FILE = "./val_rollout/4.json"  # or input.json if it's a list
 OUTPUT_FILE = "./predictions/converted_patches.json"
-MODEL_NAME = "Qwen2.5-7B-Base"
+MODEL_NAME = "Qwen2.5-7B-Coder-Instruct"
 
 test_path = "/nlp/data/sikaili/Ret_Sweagent/data/swe_eval/test.parquet"
 test_dataset = load_dataset("parquet", data_files=test_path, split="train")

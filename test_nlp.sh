@@ -2,24 +2,24 @@
 
 set -x
 export N_GPUS=8
-export BASE_MODEL="/shared/sikaili/Qwen2.5-0.5B"
-export DATA_DIR="/home1/s/sikaili/data/auto_sweagent"
-export ROLLOUT_DIR="/home1/s/sikaili/Ret_Sweagent/rollout"
+export BASE_MODEL="/nlp/data/sikaili/Qwen2.5-Coder-7B-Instruct"
+export DATA_DIR="/nlp/data/sikaili/Ret_Sweagent/data/auto_sweagent"
+export ROLLOUT_DIR="/nlp/data/sikaili/Ret_Sweagent/rollout"
 export EXPERIMENT_NAME=test
-export REWARD_PATH="/home1/s/sikaili/Ret_Sweagent/verl/utils/reward_score/__init__.py"
+export REWARD_PATH="/nlp/data/sikaili/Ret_Sweagent/verl/utils/reward_score/__init__.py"
 export TMPDIR="/nlp/data/sikaili/tmp_ray"
 
 /shared/sikaili/.conda/envs/verl/bin/python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     data.train_files=$DATA_DIR/train.parquet \
     data.val_files=$DATA_DIR/test.parquet \
-    data.train_batch_size=1024 \
-    data.max_prompt_length=5000 \
-    data.max_response_length=2048 \
+    data.train_batch_size=128 \
+    data.max_prompt_length=8000 \
+    data.max_response_length=4096 \
     actor_rollout_ref.model.path=$BASE_MODEL \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
-    actor_rollout_ref.actor.ppo_mini_batch_size=256 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=32 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.actor.use_dynamic_bsz=True \
     actor_rollout_ref.actor.ppo_max_token_len_per_gpu=21144 \

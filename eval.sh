@@ -2,7 +2,7 @@
 
 set -x
 export N_GPUS=8
-export BASE_MODEL="/nlp/data/sikaili/Qwen2.5-7B"
+export BASE_MODEL="/nlp/data/sikaili/Qwen2.5-Coder-7B-Instruct"
 export DATA_DIR="/nlp/data/sikaili/Ret_Sweagent/data/swe_eval"
 export ROLLOUT_DIR="/nlp/data/sikaili/Ret_Sweagent/rollout"
 export VAL_DIR="/nlp/data/sikaili/Ret_Sweagent/val_rollout"
@@ -56,6 +56,6 @@ export TMPDIR="/nlp/data/sikaili/tmp_ray"
     trainer.save_freq=1 \
     trainer.test_freq=2 \
     trainer.resume_mode=resume_path \
-    trainer.resume_from_path="/nlp/data/sikaili/Ret_Sweagent/checkpoints/ec2_train/train_0506/global_step_10" \
+    trainer.resume_from_path="/nlp/data/sikaili/Ret_Sweagent/checkpoints/ec2_train/train_code_0506/global_step_4" \
     trainer.default_hdfs_dir=null \
     trainer.total_epochs=15 $@
